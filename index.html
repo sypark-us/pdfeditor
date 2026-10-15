@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Editor – edit, convert, merge, sign, protect PDFs in your browser</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23d32f2f'/%3E%3Ctext x='16' y='22' font-size='15' font-family='Arial' font-weight='bold' fill='white' text-anchor='middle'%3EPDF%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="vendor/fontkit.umd.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand"><span class="logo">PDF</span><span>Editor</span></div>
+    <div class="top-actions">
+      <button id="btn-open" class="primary" title="Open a PDF (Ctrl+O)">Open</button>
+      <button id="btn-save" title="Download the current PDF (Ctrl+S)" disabled>Download</button>
+      <button id="btn-print" title="Print" disabled>Print</button>
+      <span class="sep"></span>
+      <button id="btn-undo" title="Undo document change (Ctrl+Z)" disabled>↶</button>
+      <button id="btn-redo" title="Redo (Ctrl+Y)" disabled>↷</button>
+      <span class="sep"></span>
+      <button id="btn-zoom-out" title="Zoom out">−</button>
+      <select id="zoom-select" title="Zoom">
+        <option value="width">Fit width</option>
+        <option value="page">Fit page</option>
+        <option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option>
+      </select>
+      <button id="btn-zoom-in" title="Zoom in">+</button>
+      <span class="sep"></span>
+      <span class="pager"><input id="page-input" type="number" min="1" value="1"> / <span id="page-count">0</span></span>
+      <span class="sep"></span>
+      <input id="search" type="search" placeholder="Find in document…" title="Search (Ctrl+F)">
+      <span id="search-count"></span>
+    </div>
+    <div class="top-right">
+      <span id="doc-name" class="doc-name"></span>
+      <button id="btn-fonts" title="Fonts for non-Latin text (Korean, Japanese, …)">Fonts</button>
+      <a class="help" href="https://github.com/sypark-us/pdfeditor" target="_blank" rel="noopener" title="Help / source">?</a>
+    </div>
+  </header>
+
+  <div id="main">
+    <aside id="sidebar">
+      <div class="tabs"><button class="tab active" data-tab="tools">Tools</button><button class="tab" data-tab="pages">Pages</button><button class="tab" data-tab="annots">Annotations</button></div>
+      <div id="tab-tools" class="tab-panel active">
+        <input id="tool-filter" type="search" placeholder="Filter tools…">
+        <div id="tool-list"></div>
+      </div>
+      <div id="tab-pages" class="tab-panel">
+        <div class="pages-actions">
+          <button data-act="select-all" title="Select all pages">All</button>
+          <button data-act="select-none" title="Clear selection">None</button>
+          <button data-act="rotate-left" title="Rotate selected left">⟲</button>
+          <button data-act="rotate-right" title="Rotate selected right">⟳</button>
+          <button data-act="delete" title="Delete selected pages">🗑</button>
+          <button data-act="duplicate" title="Duplicate selected pages">⧉</button>
+          <button data-act="extract" title="Extract selected pages to a new PDF">⤓</button>
+          <button data-act="blank" title="Insert a blank page after the selection">＋</button>
+        </div>
+        <p class="hint">Drag thumbnails to reorder. Click to select, Shift-click for ranges.</p>
+        <div id="thumbs"></div>
+      </div>
+      <div id="tab-annots" class="tab-panel">
+        <div class="pages-actions"><button data-act="apply">Apply to PDF</button><button data-act="clear">Clear all</button></div>
+        <div id="annot-list"></div>
+      </div>
+    </aside>
+
+    <section id="center">
+      <div id="edit-toolbar">
+        <div class="tool-group" id="annot-tools">
+          <button data-tool="select" class="active" title="Select / move (Esc)">⬚</button>
+          <button data-tool="text" title="Add text">T</button>
+          <button data-tool="pen" title="Draw freehand">✎</button>
+          <button data-tool="highlighter" title="Freehand highlighter">🖍</button>
+          <button data-tool="highlight" title="Highlight area">▆</button>
+          <button data-tool="rect" title="Rectangle">▭</button>
+          <button data-tool="ellipse" title="Ellipse">◯</button>
+          <button data-tool="line" title="Line">╱</button>
+          <button data-tool="arrow" title="Arrow">➚</button>
+          <button data-tool="image" title="Insert image">🖼</button>
+          <button data-tool="signature" title="Sign">✍</button>
+          <button data-tool="whiteout" title="Whiteout (cover content)">⬜</button>
+          <button data-tool="redact" title="Redact (permanently removes content underneath)">⬛</button>
+          <button data-tool="note" title="Sticky note comment">💬</button>
+          <button data-tool="crop" title="Crop: drag a box, then apply">✂</button>
+        </div>
+        <div class="tool-group" id="style-tools">
+          <label title="Colour"><input type="color" id="st-color" value="#d32f2f"></label>
+          <label title="Fill colour (shapes)"><input type="color" id="st-fill" value="#ffffff"><input type="checkbox" id="st-fill-on"></label>
+          <label title="Line width">W <input type="number" id="st-width" min="0.5" max="40" step="0.5" value="2"></label>
+          <label title="Opacity">α <input type="range" id="st-opacity" min="0.1" max="1" step="0.05" value="1"></label>
+          <label title="Font size">A <input type="number" id="st-size" min="4" max="200" value="14"></label>
+          <select id="st-family" title="Font family"><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option><option value="cursive">Script</option></select>
+          <button id="st-bold" title="Bold"><b>B</b></button>
+          <button id="st-italic" title="Italic"><i>I</i></button>
+        </div>
+        <div class="tool-group right">
+          <button id="btn-annot-undo" title="Undo annotation">↶</button>
+          <button id="btn-annot-redo" title="Redo annotation">↷</button>
+          <button id="btn-apply" class="primary" title="Burn annotations into the PDF" disabled>Apply changes</button>
+        </div>
+      </div>
+      <div id="viewer-wrap">
+      <div id="viewer" tabindex="0"></div>
+        <div id="dropzone">
+          <div class="drop-inner">
+            <div class="big">Drop a PDF here</div>
+            <p>or <button id="btn-open-2" class="primary">choose a file</button></p>
+            <p class="muted">Everything runs in your browser. Files never leave your computer.</p>
+            <div class="quick">
+              <div class="quick-title">Convert to PDF</div>
+              <button data-quick="word2pdf">Word (.docx)</button>
+              <button data-quick="xlsx2pdf">Excel (.xlsx)</button>
+              <button data-quick="pptx2pdf">PowerPoint (.pptx)</button>
+              <button data-quick="img2pdf">Images</button>
+              <button data-quick="html2pdf">HTML</button>
+              <button data-quick="text2pdf">Text / Markdown</button>
+              <div class="quick-title">Combine</div>
+              <button data-quick="merge">Merge PDFs</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="status"></div>
+    </section>
+
+    <aside id="panel">
+      <div id="panel-header"><span id="panel-title">Welcome</span><button id="panel-close" title="Close">×</button></div>
+      <div id="panel-body">
+        <p>Open a PDF, then pick a tool on the left. Conversions that start from Word, Excel, PowerPoint, images, HTML or text are available without opening a PDF.</p>
+      </div>
+      <div id="results"></div>
+    </aside>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div id="busy" hidden><div class="busy-box"><div class="spinner"></div><div id="busy-label">Working…</div><div class="bar"><div id="busy-bar"></div></div></div></div>
+<input type="file" id="file-input" hidden>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

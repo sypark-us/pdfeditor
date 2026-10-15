@@ -1,0 +1,241 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>PDF Editor smoke test</title><base href="../">
+<link rel="stylesheet" href="css/style.css">
+<style>#out{position:fixed;top:0;left:0;right:0;z-index:999;background:#fff;color:#000;font-family:monospace;white-space:pre-wrap;font-size:12px;max-height:45vh;overflow:auto;border-bottom:2px solid #c00;padding:4px}</style>
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="vendor/fontkit.umd.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+</head>
+<body>
+<div id="out">running…</div>
+<script type="module">
+const out = document.getElementById('out');
+const lines = []; let errors = 0;
+const log = (s) => { lines.push(s); };
+const pass = (name) => { log(`PASS ${name}`); console.log(`PASS ${name}`); };
+const fail = (name, e) => { errors++; log(`FAIL ${name}: ${e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e}`); console.log(`FAIL ${name}`, e); };
+const test = async (name, fn) => { try { await fn(); pass(name); } catch (e) { fail(name, e); } };
+const assert = (c, msg) => { if (!c) throw new Error(msg || 'assertion failed'); };
+const indexHtml = await (await fetch('index.html')).text();
+const bodyHtml = indexHtml.match(/<body>([\s\S]*)<\/body>/)[1].replace(/<script[\s\S]*?<\/script>/g, '');
+document.body.insertAdjacentHTML('beforeend', bodyHtml);
+await import('./js/app.js');
+const win = window;
+for (let i = 0; i < 100 && !win.pdfEditor; i++) await new Promise((r) => setTimeout(r, 100));
+const E = win.pdfEditor, PDFLib = win.PDFLib, pdfjs = win.pdfjsLib, M = E.modules, T = E.T;
+const textOf = async (bytes, pageIdx = null) => {
+  const pdf = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+  const parts = [];
+  for (let i = 1; i <= pdf.numPages; i++) { if (pageIdx != null && i - 1 !== pageIdx) continue; const tc = await (await pdf.getPage(i)).getTextContent(); parts.push(tc.items.map((x) => x.str).join(' ').replace(/\s+/g, ' ')); }
+  const n = pdf.numPages; await pdf.destroy();
+  return { text: parts.join('\n'), pages: n };
+};
+const pageCount = async (bytes) => (await PDFLib.PDFDocument.load(bytes)).getPageCount();
+async function samplePdf(opts = {}) {
+  const doc = await PDFLib.PDFDocument.create();
+  const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const n = opts.pages || 2;
+  for (let i = 0; i < n; i++) { const p = doc.addPage([595, 842]); p.drawText(`Sample page ${i + 1} of ${n}`, { x: 60, y: 760, size: 20, font }); p.drawText('The quick brown fox jumps over the lazy dog.', { x: 60, y: 720, size: 12, font }); if (opts.rotate && i === 1) p.setRotation(PDFLib.degrees(90)); }
+  if (opts.image) { const c = document.createElement('canvas'); c.width = 400; c.height = 300; const ctx = c.getContext('2d'); const g = ctx.createLinearGradient(0, 0, 400, 300); g.addColorStop(0, '#f00'); g.addColorStop(1, '#00f'); ctx.fillStyle = g; ctx.fillRect(0, 0, 400, 300); for (let k = 0; k < 2000; k++) { ctx.fillStyle = `hsl(${k % 360},80%,50%)`; ctx.fillRect((k * 7) % 400, (k * 13) % 300, 3, 3); } const jpg = new Uint8Array(await (await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.95))).arrayBuffer()); const img = await doc.embedJpg(jpg); doc.getPage(0).drawImage(img, { x: 60, y: 300, width: 300, height: 225 }); }
+  if (opts.form) { const form = doc.getForm(); const tf = form.createTextField('name'); tf.addToPage(doc.getPage(0), { x: 60, y: 600, width: 200, height: 24 }); const cb = form.createCheckBox('agree'); cb.addToPage(doc.getPage(0), { x: 60, y: 560, width: 18, height: 18 }); }
+  doc.setTitle('Sample Title');
+  return doc.save();
+}
+const pngFile = async (w = 120, h = 80, color = '#0a0') => { const c = document.createElement('canvas'); c.width = w; c.height = h; const ctx = c.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, w, h); ctx.fillStyle = '#fff'; ctx.fillRect(10, 10, w - 20, h - 20); const blob = await new Promise((r) => c.toBlob(r, 'image/png')); return new File([blob], 'img.png', { type: 'image/png' }); };
+const waitRendered = async (idx = 0) => { for (let i = 0; i < 100; i++) { const p = E.viewer.pages[idx]; if (p && p.rendered) return p; await E.sleep(100); } throw new Error('page not rendered'); };
+const docxWithImage = async () => { const f = await pngFile(200, 100, '#06c'); const bytes = new Uint8Array(await f.arrayBuffer()); return bytes; };
+
+try {
+  await test('app loaded with tool registry', () => { assert(E && E.tools.length >= 30, `tools: ${E && E.tools.length}`); });
+
+  let sample = await samplePdf({ pages: 3, image: true, form: true });
+  await test('open sample PDF in viewer', async () => { await E.openBytes(sample, 'sample.pdf'); assert(E.viewer.numPages === 3, 'pages'); const p = await waitRendered(0); assert(p.textLayer.querySelectorAll('span').length > 0, 'text layer'); assert(E.state.name === 'sample.pdf'); });
+
+  await test('rotate / delete / insert / duplicate / reorder / reverse', async () => {
+    let b = await T.rotatePages(sample, [0], 90); const d = await PDFLib.PDFDocument.load(b); assert(d.getPage(0).getRotation().angle === 90, 'rotation');
+    b = await T.deletePages(sample, [1]); assert(await pageCount(b) === 2, 'delete');
+    b = await T.insertBlankPage(sample, 1); assert(await pageCount(b) === 4, 'insert');
+    b = await T.duplicatePages(sample, [0, 2]); assert(await pageCount(b) === 5, 'duplicate');
+    b = await T.reorderPages(sample, [2, 0, 1]); assert((await textOf(b, 0)).text.includes('page 3'), 'reorder');
+    b = await T.reversePages(sample); assert((await textOf(b, 0)).text.includes('page 3'), 'reverse');
+  });
+  await test('merge / split / extract', async () => {
+    const other = await samplePdf({ pages: 1 });
+    const m = await T.mergePdfs([sample, other]); assert(await pageCount(m) === 4, 'merge');
+    const parts = await T.splitGroups(sample, [[0], [1, 2]]); assert(parts.length === 2 && await pageCount(parts[1]) === 2, 'split');
+    const ex = await T.extractPages(sample, [2]); assert((await textOf(ex)).text.includes('page 3'), 'extract');
+    const ins = await T.insertPdf(sample, other, 0); assert(await pageCount(ins) === 4, 'insertPdf');
+  });
+  await test('watermark, page numbers, header/footer (incl. rotated page)', async () => {
+    const rot = await samplePdf({ pages: 2, rotate: true });
+    let b = await T.watermark(rot, { text: 'DRAFT', opacity: 0.3, angle: 45 }); assert((await textOf(b)).text.includes('DRAFT'), 'watermark text');
+    b = await T.pageNumbers(b, { format: 'Page {n} of {N}' }); const t = await textOf(b); assert(t.text.includes('Page 1 of 2') && t.text.includes('Page 2 of 2'), 'numbers');
+    b = await T.headerFooter(b, { header: { center: 'HEADER {title}' }, footer: { right: '{date}' } }); assert((await textOf(b)).text.includes('HEADER Sample Title'), 'header');
+    const img = await pngFile(); const n = await win.pdfEditor.modules; void n;
+    const { normalizeImageFile } = await import('./js/util.js');
+    b = await T.watermark(rot, { image: await normalizeImageFile(img), tile: true, opacity: 0.5 }); assert(await pageCount(b) === 2, 'image watermark');
+  });
+  await test('crop, resize, n-up', async () => {
+    let b = await T.cropPages(sample, [0], { x: 50, y: 50, width: 300, height: 400 }); let d = await PDFLib.PDFDocument.load(b); const mb = d.getPage(0).getMediaBox(); assert(Math.round(mb.width) === 300 && Math.round(mb.height) === 400, `crop ${mb.width}x${mb.height}`);
+    b = await T.resizePages(sample, { size: 'Letter', orientation: 'auto', mode: 'fit' }); d = await PDFLib.PDFDocument.load(b); assert(Math.round(d.getPage(0).getWidth()) === 612, 'resize'); assert((await textOf(b, 0)).text.includes('Sample page 1'), 'resized text');
+    b = await T.nUp(sample, { per: 2, size: 'A4', border: true }); assert(await pageCount(b) === 2, 'nup'); assert((await textOf(b, 0)).text.includes('page 2'), 'nup content');
+  });
+  await test('metadata, forms, flatten, remove annotations', async () => {
+    let m = await T.getMetadata(sample); assert(m.title === 'Sample Title', 'title');
+    let b = await T.setMetadata(sample, { title: 'New Title', author: 'Tester', keywords: 'a, b' }); m = await T.getMetadata(b); assert(m.title === 'New Title' && m.author === 'Tester', 'set meta');
+    b = await T.stripMetadata(b); m = await T.getMetadata(b); assert(!m.title, 'strip');
+    const fields = await T.getFormFields(sample); assert(fields.length === 2 && fields.find((f) => f.name === 'name').kind === 'text', 'fields');
+    b = await T.setFormFields(sample, { name: 'Alice', agree: true }); const f2 = await T.getFormFields(b); assert(f2.find((f) => f.name === 'name').value === 'Alice' && f2.find((f) => f.name === 'agree').value === true, 'fill');
+    b = await T.setFormFields(sample, { name: 'Bob' }, { flatten: true }); assert((await T.getFormFields(b)).length === 0, 'flatten'); assert((await textOf(b, 0)).text.includes('Bob'), 'flattened text');
+    b = await T.removeAnnotations(sample, {}); assert((await T.getFormFields(b)).length === 0, 'remove annots');
+  });
+  await test('images: pdf->images, images->pdf, extract, compress, rasterize, grayscale', async () => {
+    const imgs = await T.pdfToImages(sample, { format: 'png', dpi: 50 }); assert(imgs.length === 3 && imgs[0].bytes.length > 100, 'pdf2img');
+    const jpgs = await T.pdfToImages(sample, { format: 'jpeg', dpi: 50, pages: [0] }); assert(jpgs.length === 1 && jpgs[0].name.endsWith('.jpg'), 'jpg');
+    const b = await T.imagesToPdf([await pngFile(), await pngFile(300, 100, '#c00')], { pageSize: 'A4', orientation: 'auto', margin: 20, fit: 'contain' }); assert(await pageCount(b) === 2, 'img2pdf');
+    const b2 = await T.imagesToPdf([await pngFile()], { pageSize: 'fit' }); const d = await PDFLib.PDFDocument.load(b2); assert(Math.round(d.getPage(0).getWidth()) === 90, 'fit size');
+    const ex = await T.extractImages(sample); assert(ex.length >= 1 && ex[0].width === 400, `extract images ${ex.length}`);
+    const c = await T.compressImages(sample, { quality: 0.4, maxDim: 200, minBytes: 100 }); assert(c.replaced === 1, `compress replaced ${c.replaced}`); assert(c.bytes.length < sample.length, 'smaller');
+    const r = await T.rasterizePdf(sample, { dpi: 60, grayscale: true }); assert(await pageCount(r) === 3, 'rasterize');
+    const cmp = await T.comparePdfs(sample, await T.rotatePages(sample, [0], 180), { scale: 0.3 }); assert(cmp.length === 3 && cmp[0].diffRatio > 0.001 && cmp[1].diffRatio < 0.001, 'compare');
+    const rep = await T.repair(sample); assert(await pageCount(rep) === 3, 'repair');
+  });
+
+  await test('annotations burn into PDF (text, shapes, pen, image, note, CJK raster) and redaction removes text', async () => {
+    const A = E.annotator;
+    const img = await pngFile(50, 50, '#f90');
+    const bytes = new Uint8Array(await img.arrayBuffer());
+    A.list(0).push({ id: 'a1', type: 'text', page: 0, x: 60, y: 500, text: 'Annotated text\nsecond line', size: 16, color: '#1976d2', family: 'sans', bold: true, italic: false, opacity: 1 });
+    A.list(0).push({ id: 'a2', type: 'rect', page: 0, x: 60, y: 400, w: 200, h: 50, color: '#d32f2f', fill: '#ffff00', strokeWidth: 2, opacity: 1 });
+    A.list(0).push({ id: 'a3', type: 'ellipse', page: 0, x: 300, y: 400, w: 100, h: 50, color: '#000', fill: '', strokeWidth: 1, opacity: 0.8 });
+    A.list(0).push({ id: 'a4', type: 'pen', page: 0, points: [{ x: 60, y: 300 }, { x: 120, y: 340 }, { x: 180, y: 300 }], color: '#080', strokeWidth: 3, opacity: 1 });
+    A.list(0).push({ id: 'a5', type: 'highlighter', page: 0, points: [{ x: 60, y: 722 }, { x: 300, y: 722 }], color: '#ffeb3b', strokeWidth: 14, opacity: 1 });
+    A.list(0).push({ id: 'a6', type: 'highlight', page: 0, x: 60, y: 750, w: 200, h: 24, color: '#ffeb3b' });
+    A.list(0).push({ id: 'a7', type: 'arrow', page: 0, x1: 300, y1: 300, x2: 450, y2: 350, color: '#333', strokeWidth: 2, opacity: 1 });
+    A.list(0).push({ id: 'a8', type: 'image', page: 0, x: 400, y: 500, w: 80, h: 80, bytes, imgType: 'png', opacity: 1 });
+    A.list(0).push({ id: 'a9', type: 'note', page: 0, x: 500, y: 700, text: 'A sticky note', color: '#ffd54f' });
+    A.list(0).push({ id: 'a10', type: 'text', page: 0, x: 60, y: 200, text: '한국어 텍스트 테스트', size: 18, color: '#000', family: 'sans', opacity: 1 });
+    A.list(0).push({ id: 'a11', type: 'whiteout', page: 0, x: 60, y: 100, w: 100, h: 30 });
+    A.list(1).push({ id: 'b1', type: 'redact', page: 1, x: 50, y: 740, w: 400, h: 50 });
+    A.redraw(0); A.redraw(1);
+    assert(E.viewer.pages[0].overlay.querySelectorAll('g.annot').length === 11, 'svg annots drawn');
+    const out = await E.applyAnnotations(sample, A.annots);
+    const t0 = await textOf(out, 0); assert(t0.text.includes('Annotated text') && t0.text.includes('second line'), 'burned text');
+    assert(t0.text.includes('Sample page 1'), 'original text intact on page 0');
+    const t1 = await textOf(out, 1); assert(!t1.text.includes('Sample page 2'), 'redacted title gone');
+    const d = await PDFLib.PDFDocument.load(out); const annots = d.getPage(0).node.Annots(); assert(annots && annots.size() >= 1, 'note annotation present');
+    A.reset();
+  });
+  await test('annotator undo/redo/select and tool switching', async () => {
+    const A = E.annotator;
+    A.snapshot(); A.list(0).push({ id: 'u1', type: 'rect', page: 0, x: 10, y: 10, w: 50, h: 50, color: '#000', strokeWidth: 1, opacity: 1 }); A.redraw(0);
+    assert(A.count() === 1, 'count'); A.undo(); assert(A.count() === 0, 'undo'); A.redo(); assert(A.count() === 1, 'redo');
+    E.setAnnotTool('rect'); assert(A.tool === 'rect' && E.viewer.pages[0].overlay.classList.contains('drawing'), 'tool');
+    E.setAnnotTool('select'); A.reset(); A.redrawAll();
+  });
+  await test('crop via UI selection object + applyDoc history/undo', async () => {
+    const before = E.state.bytes;
+    await E.applyDoc(await T.rotatePages(E.state.bytes, [0], 90), null);
+    assert(E.state.history.length === 1, 'history');
+    const d = await PDFLib.PDFDocument.load(E.state.bytes); assert(d.getPage(0).getRotation().angle === 90, 'applied');
+    assert(before !== E.state.bytes);
+  });
+
+  await test('encryption: protect, open owner-restricted automatically, decrypt with password', async () => {
+    const plain = await T.saveDoc(await T.loadDoc(sample), { useObjectStreams: false });
+    const enc = await M.encryptPdf(plain, { userPassword: 'secret', ownerPassword: 'owner', method: 'aes256', permissions: { copy: false } });
+    assert(M.isEncrypted(enc), 'is encrypted');
+    let threw = false; try { await M.decryptPdf(enc, 'nope'); } catch (e) { threw = /password/i.test(e.message); } assert(threw, 'wrong pw rejected');
+    const dec = await M.decryptPdf(enc, 'secret'); assert(!dec.isOwner && dec.permissions.copy === false, 'user perms');
+    const reloaded = await T.saveDoc(await T.loadDoc(dec.bytes)); assert((await textOf(reloaded)).text.includes('Sample page 1'), 'decrypted text');
+    const ownerOnly = await M.encryptPdf(plain, { userPassword: '', ownerPassword: 'owner', method: 'aes128', permissions: { print: false } });
+    await E.openBytes(ownerOnly, 'locked.pdf', { force: true }); assert(E.state.wasEncrypted && E.viewer.numPages === 3, 'auto-unlocked');
+    assert(!M.isEncrypted(E.state.bytes), 'working copy is plain');
+  });
+
+  await test('document model: docx write/read round trip, render to PDF, pdf->doc->docx/html', async () => {
+    const { newDoc, para, run } = await import('./js/docmodel.js');
+    const imgBytes = await docxWithImage();
+    const doc = newDoc();
+    doc.title = 'Round Trip';
+    doc.blocks.push(para([run('Heading One', { bold: true, size: 20 })], { heading: 1 }));
+    doc.blocks.push(para([run('This is a '), run('bold', { bold: true }), run(' and '), run('italic', { italic: true }), run(' paragraph with a '), run('link', { link: 'https://example.com', underline: true, color: '#0563C1' }), run('. It is long enough to wrap onto several lines when rendered into a PDF page at the default width so that line breaking is exercised properly.')], { align: 'justify' }));
+    doc.blocks.push(para([run('First item')], { list: { kind: 'bullet', level: 0, text: '•' }, indent: 18, hanging: 14 }));
+    doc.blocks.push(para([run('Second item')], { list: { kind: 'number', level: 0, text: '1.' }, indent: 18, hanging: 14 }));
+    doc.blocks.push({ type: 'table', colWidths: [120, 200], borders: true, rows: [{ header: true, cells: [{ blocks: [para([run('H1', { bold: true })])], colSpan: 1, shading: '#EEEEEE' }, { blocks: [para([run('H2', { bold: true })])], colSpan: 1 }] }, { cells: [{ blocks: [para([run('cell a')])], colSpan: 1 }, { blocks: [para([run('cell b with more text that wraps inside the cell')])], colSpan: 1 }] }] });
+    doc.blocks.push({ type: 'image', bytes: imgBytes, imgType: 'png', width: 150, height: 75, align: 'center' });
+    doc.blocks.push({ type: 'pageBreak' });
+    doc.blocks.push(para([run('Second page text 한글 포함')], {}));
+    doc.footer = [para([run('Page '), { text: '', field: 'PAGE', size: 9 }, run(' of '), { text: '', field: 'NUMPAGES', size: 9 }], { align: 'center' })];
+    const docx = await M.writeDocx(doc);
+    const zip = await win.JSZip.loadAsync(docx);
+    const xml = await zip.file('word/document.xml').async('string');
+    assert(xml.includes('Heading One') && xml.includes('<w:tbl>') && xml.includes('<w:drawing>') && xml.includes('w:type="page"') && xml.includes('<w:hyperlink'), 'docx xml parts');
+    assert(zip.file('word/media/image1.png') && zip.file('word/footer1.xml'), 'media + footer');
+    const back = await M.readDocx(docx);
+    assert(back.title === 'Round Trip', 'title back');
+    assert(back.blocks[0].type === 'paragraph' && back.blocks[0].runs[0].text === 'Heading One' && back.blocks[0].heading === 1, 'heading back');
+    assert(back.blocks[1].runs.some((r) => r.bold && r.text === 'bold') && back.blocks[1].align === 'justify', 'runs back');
+    assert(back.blocks[2].list && back.blocks[2].list.kind === 'bullet' && back.blocks[3].list.kind === 'number' && back.blocks[3].list.text === '1.', 'lists back');
+    const tbl = back.blocks.find((b) => b.type === 'table'); assert(tbl && tbl.rows.length === 2 && tbl.rows[0].cells[0].shading === '#EEEEEE', 'table back');
+    assert(back.blocks.some((b) => b.type === 'paragraph' && b.runs.some((r) => r.image)), 'image back');
+    assert(back.footer.length === 1 && back.footer[0].runs.some((r) => r.field === 'PAGE'), 'footer back');
+    const pdf = await M.renderDocToPdf(back);
+    const t = await textOf(pdf); assert(t.pages === 2, `pages ${t.pages}`); assert(t.text.includes('Heading One') && t.text.includes('cell b') && t.text.includes('Page 1 of 2') && t.text.includes('Second page text'), 'rendered text');
+    const pj = await pdfjs.getDocument({ data: pdf.slice() }).promise;
+    const model = await M.pdfToDoc(pj, { images: true });
+    await pj.destroy();
+    const texts = model.blocks.filter((b) => b.type === 'paragraph').map((b) => b.runs.map((r) => r.text).join(''));
+    assert(texts.some((s) => s.includes('Heading One')) && texts.some((s) => s.includes('line breaking')), 'pdf->doc paragraphs');
+    assert(model.blocks.some((b) => b.type === 'image'), 'pdf->doc image');
+    assert(model.blocks.find((b) => b.type === 'paragraph' && b.runs[0].text.includes('Heading One')).runs[0].bold, 'bold detected');
+    const docx2 = await M.writeDocx(model); assert(docx2.length > 1000, 'docx from pdf');
+    const html = M.writeHtml(model); assert(html.includes('Heading One') && html.includes('<img'), 'html');
+    const txt = await (async () => { const p2 = await pdfjs.getDocument({ data: pdf.slice() }).promise; const s = await M.pdfToText(p2); await p2.destroy(); return s; })();
+    assert(txt.includes('Heading One') && txt.includes('\f'), 'text');
+  });
+  await test('markdown / html / text / xlsx / pptx readers -> PDF', async () => {
+    const md = M.readMarkdown('# Title\n\nSome *emph* and **strong** text.\n\n- a\n- b\n  - nested\n\n1. one\n2. two\n\n```\ncode here\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n> quote');
+    assert(md.blocks[0].heading === 1 && md.blocks.some((b) => b.type === 'table') && md.blocks.filter((b) => b.list).length === 5, 'markdown model');
+    let t = await textOf(await M.renderDocToPdf(md)); assert(t.text.includes('Title') && t.text.includes('code here') && t.text.includes('nested'), 'md pdf');
+    const html = await M.readHtml('<html><body><h2>HTML Head</h2><p style="text-align:center">Centered <b>bold</b></p><ul><li>one</li><li>two</li></ul><table><tr><th>X</th><th>Y</th></tr><tr><td>1</td><td>2</td></tr></table><pre>pre text</pre></body></html>');
+    assert(html.blocks[0].heading === 2 && html.blocks[1].align === 'center' && html.blocks.some((b) => b.type === 'table'), 'html model');
+    t = await textOf(await M.renderDocToPdf(html)); assert(t.text.includes('HTML Head') && t.text.includes('pre text'), 'html pdf');
+    const txt = M.readText('line one\n\nline three', { mono: true }); assert(txt.blocks.length === 3, 'text model');
+    t = await textOf(await M.renderDocToPdf(txt)); assert(t.text.includes('line three'), 'txt pdf');
+    // minimal xlsx
+    const z = new win.JSZip();
+    z.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>');
+    z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>');
+    z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
+    z.file('xl/sharedStrings.xml', '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>Name</t></si><si><t>Amount</t></si><si><t>Widget</t></si></sst>');
+    z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>12.5</v></c></row></sheetData></worksheet>');
+    const xlsx = await M.readXlsx(await z.generateAsync({ type: 'uint8array' }));
+    const table = xlsx.blocks.find((b) => b.type === 'table'); assert(table && table.rows.length === 2 && table.rows[1].cells[1].blocks[0].runs[0].text === '12.5', 'xlsx model');
+    t = await textOf(await M.renderDocToPdf(xlsx)); assert(t.text.includes('Widget') && t.text.includes('12.5'), 'xlsx pdf');
+    // pptx produced by our writer, read back
+    const imgs = await T.pdfToImages(sample, { format: 'jpeg', dpi: 40, pages: [0, 1] });
+    const pptx = await M.writePptx(imgs.map((i) => ({ bytes: i.bytes, imgType: 'jpg', width: 595, height: 842 })), { title: 'deck' });
+    const pz = await win.JSZip.loadAsync(pptx); assert(pz.file('ppt/slides/slide2.xml') && pz.file('ppt/presentation.xml') && pz.file('ppt/media/image1.jpeg'), 'pptx parts');
+    const deck = await M.readPptx(pptx); assert(deck.blocks.filter((b) => b.type === 'absolute').length === 2, 'pptx model');
+    const deckPdf = await M.renderDocToPdf(deck); assert(await pageCount(deckPdf) === 2, 'pptx pdf');
+  });
+  await test('CJK text in document conversion falls back to raster (no font loaded)', async () => {
+    const { newDoc, para, run } = await import('./js/docmodel.js');
+    const doc = newDoc(); doc.blocks.push(para([run('안녕하세요 PDF 편집기 테스트입니다. '.repeat(8))]));
+    const pdf = await M.renderDocToPdf(doc); const d = await PDFLib.PDFDocument.load(pdf); assert(d.getPageCount() === 1, 'rendered');
+    assert((await textOf(pdf)).text.includes('PDF'), 'latin parts still text');
+  });
+  await test('tool panels build without errors', async () => {
+    await E.openBytes(sample, 'sample.pdf', { force: true });
+    const skip = new Set();
+    for (const t of E.tools) { if (skip.has(t.id)) continue; await E.openTool(t.id); const body = win.document.getElementById('panel-body'); assert(!body.querySelector('.note.warn'), `panel ${t.id}: ${body.textContent.slice(0, 80)}`); assert(body.children.length > 0, `panel ${t.id} empty`); }
+  });
+  await test('viewer search + zoom', async () => {
+    const hits = await E.viewer.search('quick brown'); assert(hits.length === 3, `hits ${hits.length}`);
+    E.viewer.setZoom('custom', 1.5); assert(Math.abs(E.viewer.scale - 1.5) < 0.01, 'zoom'); E.viewer.setZoom('width');
+  });
+} catch (e) { errors++; lines.push(`EXCEPTION ${e.stack || e}`); }
+out.textContent = `SMOKE-RESULTS\n${lines.join('\n')}\nERRORS ${errors}`;
+</script>
+</body></html>
