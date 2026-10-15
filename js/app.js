@@ -1,6 +1,6 @@
 // Application shell: wires the viewer, annotation editor and all tool panels together.
 import '../vendor/pdfjs/pdf.min.mjs';
-import { $, $$, el, readFileBytes, readFileText, readFileDataURL, downloadBytes, downloadBlob, baseName, formatBytes, parsePageRanges, parseRangeGroups, makeZip, normalizeImageFile, canvasToBytes, PAGE_SIZES, sleep } from './util.js';
+import { $, $$, el, readFileBytes, readFileText, readFileDataURL, downloadBytes, downloadBlob, baseName, formatBytes, parsePageRanges, parseRangeGroups, makeZip, normalizeImageFile, canvasToBytes, PAGE_SIZES, sleep, pdfjsDocOptions } from './util.js';
 import { Viewer, pageSizeLabel } from './viewer.js';
 import { Annotator, applyAnnotations } from './annot.js';
 import * as T from './pdftools.js';
@@ -14,7 +14,7 @@ import { customFonts, addCustomFont, removeCustomFont, listLocalFonts, loadLocal
 import { ocrPdf, OCR_LANGS } from './ocr.js';
 
 const pdfjsLib = globalThis.pdfjsLib;
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = globalThis.__pdfeditorAssets ? globalThis.__pdfeditorAssets.workerUrl : 'vendor/pdfjs/pdf.worker.min.mjs';
 
 // ---------------------------------------------------------------- state & UI helpers
 const state = { name: 'document.pdf', bytes: null, history: [], future: [], activeTool: null, selected: new Set(), wasEncrypted: false, lastAnchor: null };
@@ -578,7 +578,7 @@ tool({ id: 'pdf2word', group: 'from', icon: 'W', name: 'PDF to Word', desc: 'Edi
   body.append(runButton('Convert to Word', async () => {
     const bytes = requireDoc();
     const out = await busy('Converting to Word…', async (progress) => {
-      const pdf = await pdfjsLib.getDocument({ data: bytes.slice(), cMapUrl: 'vendor/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: 'vendor/pdfjs/standard_fonts/' }).promise;
+      const pdf = await pdfjsLib.getDocument({ data: bytes.slice(), ...pdfjsDocOptions() }).promise;
       const doc = await pdfToDoc(pdf, { mode: mode.value, images: images.checked, onProgress: progress });
       await pdf.destroy();
       return writeDocx(doc, { title: baseName(state.name) });
@@ -590,10 +590,10 @@ tool({ id: 'pdf2word', group: 'from', icon: 'W', name: 'PDF to Word', desc: 'Edi
 tool({ id: 'pdf2text', group: 'from', icon: 'T', name: 'PDF to Text', desc: 'Plain .txt', needsDoc: true, build(body) {
   const layout = checkbox(false);
   body.append(field(el('label', {}, layout, ' Keep column layout with spaces'), el('span')));
-  body.append(runButton('Extract text', async () => { const bytes = requireDoc(); const txt = await busy('Extracting…', async (progress) => { const pdf = await pdfjsLib.getDocument({ data: bytes.slice(), cMapUrl: 'vendor/pdfjs/cmaps/', cMapPacked: true }).promise; const t = await pdfToText(pdf, { layout: layout.checked, onProgress: progress }); await pdf.destroy(); return t; }); const b = new TextEncoder().encode(txt); addResult({ name: `${baseName(state.name)}.txt`, bytes: b, type: 'text/plain' }); downloadBytes(b, `${baseName(state.name)}.txt`, 'text/plain'); }));
+  body.append(runButton('Extract text', async () => { const bytes = requireDoc(); const txt = await busy('Extracting…', async (progress) => { const pdf = await pdfjsLib.getDocument({ data: bytes.slice(), ...pdfjsDocOptions() }).promise; const t = await pdfToText(pdf, { layout: layout.checked, onProgress: progress }); await pdf.destroy(); return t; }); const b = new TextEncoder().encode(txt); addResult({ name: `${baseName(state.name)}.txt`, bytes: b, type: 'text/plain' }); downloadBytes(b, `${baseName(state.name)}.txt`, 'text/plain'); }));
 } });
 tool({ id: 'pdf2html', group: 'from', icon: '<>', name: 'PDF to HTML', desc: 'Web page with text and images', needsDoc: true, build(body) {
-  body.append(runButton('Convert to HTML', async () => { const bytes = requireDoc(); const html = await busy('Converting…', async (progress) => { const pdf = await pdfjsLib.getDocument({ data: bytes.slice(), cMapUrl: 'vendor/pdfjs/cmaps/', cMapPacked: true }).promise; const doc = await pdfToDoc(pdf, { onProgress: progress }); await pdf.destroy(); return writeHtml(doc, { title: baseName(state.name) }); }); const b = new TextEncoder().encode(html); addResult({ name: `${baseName(state.name)}.html`, bytes: b, type: 'text/html' }); downloadBytes(b, `${baseName(state.name)}.html`, 'text/html'); }));
+  body.append(runButton('Convert to HTML', async () => { const bytes = requireDoc(); const html = await busy('Converting…', async (progress) => { const pdf = await pdfjsLib.getDocument({ data: bytes.slice(), ...pdfjsDocOptions() }).promise; const doc = await pdfToDoc(pdf, { onProgress: progress }); await pdf.destroy(); return writeHtml(doc, { title: baseName(state.name) }); }); const b = new TextEncoder().encode(html); addResult({ name: `${baseName(state.name)}.html`, bytes: b, type: 'text/html' }); downloadBytes(b, `${baseName(state.name)}.html`, 'text/html'); }));
 } });
 tool({ id: 'pdf2img', group: 'from', icon: '🖼', name: 'PDF to images', desc: 'PNG / JPG / WebP per page', needsDoc: true, build(body) {
   const fmt = select([['png', 'PNG'], ['jpeg', 'JPG'], ['webp', 'WebP']], 'png'); const dpi = number(150, { min: 36, max: 600 }); const quality = number(0.9, { min: 0.1, max: 1, step: 0.05 }); const pages = pagesInput(); const gray = checkbox(false); const transparent = checkbox(false);
@@ -828,5 +828,5 @@ window.addEventListener('resize', () => { if (viewer.fitMode !== 'custom') viewe
 window.addEventListener('beforeunload', (e) => { if (state.bytes && (state.history.length || annotator.hasAnnotations())) { e.preventDefault(); e.returnValue = ''; } });
 
 // expose for tests / console
-globalThis.pdfEditor = { state, viewer, annotator, openBytes, openFile, applyDoc, T, tools: TOOLS, openTool, results, busy, sleep, applyAnnotations, setAnnotTool, modules: { readDocx, readXlsx, readPptx, readHtml, readMarkdown, readText, writeDocx, renderDocToPdf, pdfToDoc, pdfToText, writeHtml, writePptx, decryptPdf, encryptPdf, isEncrypted, ocrPdf, addCustomFont } };
+globalThis.pdfEditor = { state, viewer, annotator, openBytes, openFile, applyDoc, T, tools: TOOLS, openTool, results, busy, sleep, applyAnnotations, setAnnotTool, modules: { readDocx, readXlsx, readPptx, readHtml, readMarkdown, readText, writeDocx, renderDocToPdf, pdfToDoc, pdfToText, writeHtml, writePptx, decryptPdf, encryptPdf, isEncrypted, ocrPdf, addCustomFont, pdfjsDocOptions } };
 status('Ready. Open a PDF or drop one here.');

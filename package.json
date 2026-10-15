@@ -6,9 +6,11 @@
   "private": true,
   "scripts": {
     "start": "node test/serve.mjs 8080",
-    "test": "node --test \"test/*.test.mjs\" && node test/run-smoke.mjs",
+    "build": "node build.mjs",
+    "test": "node --test \"test/*.test.mjs\" && node test/run-smoke.mjs && node test/standalone-check.mjs",
     "test:unit": "node --test \"test/*.test.mjs\"",
-    "test:smoke": "node test/run-smoke.mjs"
+    "test:smoke": "node test/run-smoke.mjs",
+    "test:standalone": "node test/standalone-check.mjs"
   },
   "license": "MIT",
   "repository": "github:sypark-us/pdfeditor"

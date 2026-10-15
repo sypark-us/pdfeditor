@@ -1,7 +1,7 @@
 // Page-level tools built on pdf-lib (and pdf.js for anything that needs rendering/decoding).
 // Every function takes PDF bytes and returns new bytes (or files), so the app can keep an undo stack.
 import { FontManager } from './fonts.js';
-import { hexToRgb, PAGE_SIZES, canvasToBytes, normalizeImageFile } from './util.js';
+import { hexToRgb, PAGE_SIZES, canvasToBytes, normalizeImageFile, pdfjsDocOptions } from './util.js';
 
 const PL = () => globalThis.PDFLib;
 const pdfjs = () => globalThis.pdfjsLib;
@@ -379,7 +379,7 @@ export async function repair(bytes) {
 // ---------- images ----------
 /** Render pages with pdf.js. returns canvases (caller frees). opts: {scale|dpi, pages:[idx]} */
 export async function renderPages(bytes, opts, onPage) {
-  const task = pdfjs().getDocument({ data: bytes.slice(), cMapUrl: 'vendor/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: 'vendor/pdfjs/standard_fonts/', password: opts.password });
+  const task = pdfjs().getDocument({ data: bytes.slice(), ...pdfjsDocOptions(), password: opts.password });
   const pdf = await task.promise;
   const pages = opts.pages || Array.from({ length: pdf.numPages }, (_, i) => i);
   for (const i of pages) {
@@ -523,7 +523,7 @@ export async function compressImages(bytes, opts = {}, onProgress) {
 /** List images in the document via pdf.js (decoded), for the Extract Images tool. */
 export async function extractImages(bytes, onProgress) {
   const { pageImages } = await import('./pdf2doc.js');
-  const pdf = await pdfjs().getDocument({ data: bytes.slice(), cMapUrl: 'vendor/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: 'vendor/pdfjs/standard_fonts/' }).promise;
+  const pdf = await pdfjs().getDocument({ data: bytes.slice(), ...pdfjsDocOptions() }).promise;
   const out = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);

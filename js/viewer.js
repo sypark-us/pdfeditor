@@ -1,6 +1,6 @@
 // Continuous-scroll PDF viewer on pdf.js: lazy page rendering, selectable text layer,
 // thumbnails, zoom, search. Each page gets an overlay element the annotation editor draws into.
-import { el, $, clamp } from './util.js';
+import { el, $, clamp, pdfjsDocOptions } from './util.js';
 
 const pdfjs = () => globalThis.pdfjsLib;
 
@@ -27,7 +27,7 @@ export class Viewer {
 
   async load(bytes, opts = {}) {
     await this.destroy();
-    const task = pdfjs().getDocument({ data: bytes.slice(), cMapUrl: 'vendor/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: 'vendor/pdfjs/standard_fonts/', password: opts.password, enableXfa: true });
+    const task = pdfjs().getDocument({ data: bytes.slice(), ...pdfjsDocOptions(), password: opts.password, enableXfa: true });
     task.onPassword = (update, reason) => { if (opts.onPassword) opts.onPassword(update, reason); else update(null); };
     this.pdf = await task.promise;
     this.container.innerHTML = '';

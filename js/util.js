@@ -157,6 +157,17 @@ export const escapeXml = escapeHtml;
 
 export function uid() { return Math.random().toString(36).slice(2, 10); }
 
+/**
+ * pdf.js getDocument() options for CMaps and standard fonts. When the app runs as the
+ * single-file build (pdfeditor.html, opened from disk) the assets are embedded and served
+ * through reader factories instead of URLs, because file:// pages cannot fetch().
+ */
+export function pdfjsDocOptions() {
+  const A = globalThis.__pdfeditorAssets;
+  if (A) return { CMapReaderFactory: A.CMapReaderFactory, StandardFontDataFactory: A.StandardFontDataFactory, useWorkerFetch: false, cMapPacked: true, cMapUrl: 'embedded/', standardFontDataUrl: 'embedded/' };
+  return { cMapUrl: 'vendor/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: 'vendor/pdfjs/standard_fonts/' };
+}
+
 export function bytesToBase64(bytes) {
   let s = '';
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));

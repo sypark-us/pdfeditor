@@ -6,6 +6,11 @@
 <title>PDF Editor – edit, convert, merge, sign, protect PDFs in your browser</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23d32f2f'/%3E%3Ctext x='16' y='22' font-size='15' font-family='Arial' font-weight='bold' fill='white' text-anchor='middle'%3EPDF%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/style.css">
+<script>
+// Browsers block ES modules and fetch() on file:// pages, so when this file is opened from disk
+// (double-click) switch to the single-file build, which has everything inlined.
+if (location.protocol === 'file:') location.replace('pdfeditor.html');
+</script>
 <script src="vendor/pdf-lib.min.js"></script>
 <script src="vendor/fontkit.umd.min.js"></script>
 <script src="vendor/jszip.min.js"></script>
